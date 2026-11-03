@@ -1,0 +1,44 @@
+# The Console Mode safety check's verdicts, kept here for Console Mode for Windows: every hour (just after the
+# check runs) the flag files are copied into safety/, and committed only when they changed. The app reads
+# safety/linux_update.ini (and the rest) from this repository.
+name: Safety check verdicts
+
+on:
+  schedule:
+    - cron: "41 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: safety
+  cancel-in-progress: false
+
+jobs:
+  copy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Copy the verdicts
+        run: |
+          set -e
+          mkdir -p safety
+          base="https://raw.githubusercontent.com/f3bandit/ss1_tool/main/update_flags"
+          for f in linux_update.ini linux_update_readme.ini cores_update.ini cores_update_readme.ini cm_watch.json cm_report.md; do
+            curl -fsSL --retry 3 "$base/$f?t=$(date +%s)" -o "safety/$f.new"
+            [ -s "safety/$f.new" ] || { echo "::error::$f came back empty"; exit 1; }
+            sed -i 's/what SS1 Tool shows/what the app shows/g; s/SS1 Tool/the app/g' "safety/$f.new"
+            mv "safety/$f.new" "safety/$f"
+          done
+          python3 -c "import json; json.load(open('safety/cm_watch.json'))"
+          grep -qiE '^[[:space:]]*linux_update[[:space:]]*=' safety/linux_update.ini
+      - name: Commit when changed
+        run: |
+          git add safety/
+          if git diff --cached --quiet; then echo "No change"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Safety check: $(grep -iE '^[[:space:]]*linux_update' safety/linux_update.ini | tr -d '\r'), $(grep -iE '^[[:space:]]*cores_update' safety/cores_update.ini | tr -d '\r')"
+          git push
